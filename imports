@@ -1,0 +1,195 @@
+Option Compare Database
+
+Function clean_sg_headings(txt As String)
+    Dim objRegEx As Object
+    Set objRegEx = CreateObject("VBScript.RegExp")
+    With objRegEx
+      .Pattern = "(?:Indicator|Indicador)\s+(\d+)\.(\d+)\.(\d+[a-z]?).+?(?:"","")"
+      .IgnoreCase = blnCase
+      .Global = True
+      clean_sg_headings = .Replace(txt, "$1_$2_$3"",""")
+    End With
+End Function
+Sub Fetch_sg_assessments(ByVal url As String, ByVal Sector_id, ByVal Sector, ByVal sTable As String)
+  Status "Fetching assessments from surveygizmo : " & Sector
+  Echo False
+  Dim db As Database
+  Set db = CurrentDb
+    With db
+      Fetch_sg_to_table url
+      db.Execute (SQL("delete_from_temp_already_imported"))
+      db.Execute ("ALTER TABLE sg_temp ADD COLUMN Assessment_id INT;")
+      Update_previous_assessments Sector_id, Sector, tmp_tbl
+      Append_new_assessments Sector_id, Sector, tmp_tbl
+      Debug.Print "--- Fetched " & CurrentDb.TableDefs(sTable).RecordCount & " new records"
+    End With
+  Set db = Nothing
+  Echo True
+  Status ""
+End Sub
+Sub Fetch_sg_feedback()
+  Status "Fetching assessment comments from surveygizmo"
+  Echo False
+  Dim db As Database
+  Set db = CurrentDb
+    With db
+      url = get_global("response_url_feedback")
+      Fetch_sg_to_table url, "ImportSpecification-feedback"
+      db.Execute (SQL("repair_broken_sguids_feedback"))
+      db.Execute ("ALTER TABLE sg_temp ADD COLUMN sguid TEXT(30);")
+      db.Execute ("UPDATE sg_temp SET sg_temp.sguid = left([URL Variable: sguid],instr([URL Variable: sguid],'_')-1);")
+      db.Execute (SQL("update_feedback"))
+      Debug.Print "Feedback:"
+      Debug.Print "--- Fetched " & db.RecordsAffected & " new comments"
+    End With
+  Set db = Nothing
+  Echo True
+  Status ""
+End Sub
+Sub Fetch_sg_to_table(ByVal url As String, Optional ByVal spec As String = Empty, Optional ByVal tmp_table As String = "sg_temp")
+  tmp_file = Environ("Temp") & "\sg_tmp.csv"
+  
+  'fetch and strip indicator text from column headings
+  sg_csv = clean_sg_headings(HTTP_Retrieve_asText(Trim(url) & "&realtime=true"))
+  
+  WriteToTextFile sg_csv, tmp_file
+  
+  If TableExists(tmp_table) Then CurrentDb.Execute "DROP TABLE " & tmp_table & ";"
+  
+  DoCmd.TransferText acImportDelim, spec, tmp_table, tmp_file, True ', , 65001
+  
+  CurrentDb.Execute (SQL("delete_from_temp_nulls"))
+  CurrentDb.Execute (SQL("repair_broken_sguids"))
+  
+  Kill tmp_file 'Delete the temporary CSV file
+End Sub
+
+Sub Append_new_assessments(ByVal Sector_id, ByVal Sector As String, Optional ByVal sTable As String = "sg_temp")
+  Append_new_responses Sector_id, Sector
+  qry_append = SQL("append_assessments_meta")
+  qry_append = Replace(qry_append, "[[Sector_id]]", "'" & Sector_id & "'")
+  qry_append = Replace(qry_append, "[[Sector]]", "'" & Sector & "'")
+  CurrentDb.Execute (qry_append)
+End Sub
+Sub Update_previous_assessments(ByVal Sector_id, ByVal Sector As String, Optional ByVal sTable As String = "sg_temp")
+  qry_update = SQL("update_assessments_meta")
+  qry_update = Replace(qry_update, "[[Sector_id]]", "'" & Sector_id & "'")
+  qry_update = Replace(qry_update, "[[Sector]]", "'" & Sector & "'")
+  CurrentDb.Execute (qry_update)
+  Update_previous_responses Sector_id, Sector
+  CurrentDb.Execute (SQL("delete_from_temp_already_imported")) 'second pass?
+End Sub
+Sub Update_previous_responses(ByVal Sector_id, ByVal Sector As String, Optional ByVal sTable As String = "sg_temp")
+  process_responses "update", Sector_id, Sector
+End Sub
+Sub Append_new_responses(ByVal Sector_id, ByVal Sector As String, Optional ByVal sTable As String = "sg_temp")
+  process_responses "append", Sector_id, Sector
+End Sub
+Sub process_responses(ByVal process As String, ByVal Sector_id, ByVal Sector As String, Optional ByVal sTable As String = "sg_temp")
+  Dim db As Database
+  Dim rst As Recordset
+  Dim fld As Field
+  Set db = CurrentDb
+  Set rst = db.OpenRecordset(sTable, dbOpenSnapshot)
+    Select Case process
+      Case "update"
+        qry_process = SQL("update_previous_responses")
+      Case "append"
+        qry_process = SQL("append_new_responses")
+    End Select
+    qry_process = Replace(qry_process, "[[Sector_id]]", "'" & Sector_id & "'")
+    qry_process = Replace(qry_process, "[[Sector]]", "'" & Sector & "'")
+    For Each fld In rst.Fields
+      If fld.Name Like "#*_#*_#*" Then
+        qry_process_fld = Replace(qry_process, "[[ind_num_col]]", fld.Name)
+        qry_process_fld = Replace(qry_process_fld, "[[ind_num]]", Replace(fld.Name, "_", "."))
+        db.Execute (qry_process_fld)
+      End If
+    Next fld
+    'Debug.Print "    --- Processed " & db.RecordsAffected & " columns (" & process & ")"
+  Set fld = Nothing
+  Set rst = Nothing
+End Sub
+Public Function Import_sg_data()
+  'reset_test
+  If username = Empty Then username = GetUserName 'InputBox("Username?")
+  If pw = Empty Then pw = InputBox_Password("Username :" & GetUserName & vbCrLf & vbCrLf & "Please enter your password:")
+  start_time = Now
+  Dim db As Database
+  Dim rst As Recordset
+  Set db = CurrentDb
+  Set rst = db.OpenRecordset("Response_urls", dbOpenSnapshot) '("SELECT * FROM Response_urls WHERE sec_num = '2' AND language = 'English';", dbOpenSnapshot) '
+  tmp_tbl = "sg_temp"
+  new_records = 0
+  With rst
+    .MoveLast
+    .MoveFirst
+    Do While Not rst.EOF
+      Debug.Print !Sector_number & " : " & !language & " : " & !url
+      Fetch_sg_assessments !url, !Sector_id, !Sector, tmp_tbl
+      .MoveNext
+    Loop
+  End With
+  Fetch_sg_feedback
+  replace_from_query "SOE Analysis", "SOE_Assessments_xtab"
+  Update_SOE_Dashboard
+  'Debug.Print "A total of " & new_records & " records inserted"
+  time_elapsed = Format(Now - start_time, "hh:mm:ss")
+  MsgBox "The NO assessment response data has been updated." & vbCrLf & vbCrLf & "Time elapsed : " & time_elapsed
+End Function
+Function Update_SOE_Dashboard(Optional ByVal username As String = "", _
+                              Optional ByVal pw As String = "")
+  If username = Empty Then username = GetUserName 'InputBox("Username?")
+  If pw = Empty Then pw = InputBox_Password("Username :" & GetUserName & vbCrLf & vbCrLf & "Please enter your password:")
+  sp_url = get_global("sp_url_assessment_results")
+  SendPdfToSharepoint "SOE Assessment Completion Status", sp_url, , , username, pw
+  'SendPdfToSharepoint "SOE Analysis-Trends", sp_url, , , username, pw
+End Function
+Sub Publish_SOE_Reports()
+  destpath = CurrentProject.path
+  destfile = "SOE_Assessment_Completion_Status"
+  reportname = "SOE Assessment Completion Status"
+  ShowPDF = True
+  PrintToPDF reportname, destpath, destfile, ShowPDF
+End Sub
+Sub reset_test()
+  CurrentDb.Execute ("DELETE * FROM Assessments_test;")
+  CurrentDb.Execute ("INSERT INTO Assessments_test SELECT * From Assessments_mock;")
+  CurrentDb.Execute ("DELETE * FROM Responses_test;")
+  CurrentDb.Execute ("INSERT INTO Responses_test SELECT * From Responses_mock;")
+End Sub
+Sub groan()
+  Dim rst As Recordset
+  Dim fld As Field
+  Set rst = CurrentDb.OpenRecordset("sg_temp", dbOpenSnapshot)
+    With rst
+      .MoveLast
+      .MoveFirst
+      Do While Not .EOF
+        Debug.Print ![Response ID] & ": "; MD5_string(Nz(![General Feedback]))
+        .MoveNext
+      Loop
+    End With
+  Set rst = Nothing
+End Sub
+'Sub process_assessments(ByVal process As String, ByVal sector_id, ByVal sector As String, Optional ByVal sTable As String = "sg_temp")
+'  Select Case process
+'    Case "update"
+'      qry_process = SQL("update_assessments_meta")
+'    Case "append"
+'      Append_new_responses sector_id, sector
+'      qry_process = SQL("append_assessments_meta")
+'  End Select
+'  qry_process = Replace(qry_process, "[[Sector_id]]", "'" & sector_id & "'")
+'  qry_process = Replace(qry_process, "[[Sector]]", "'" & sector & "'")
+'  CurrentDb.Execute (qry_update)
+'  Update_previous_responses sector_id, sector
+'  CurrentDb.Execute (SQL("delete_from_temp_already_imported")) 'second pass?
+'End Sub
+'Sub Update_previous_assessments(ByVal sector_id, ByVal sector As String, Optional ByVal sTable As String = "sg_temp")
+'  process_assessments "update", sector_id, sector
+'End Sub
+'Sub Append_new_assessments(ByVal sector_id, ByVal sector As String, Optional ByVal sTable As String = "sg_temp")
+'  process_assessments "append", sector_id, sector
+'End Sub
+
