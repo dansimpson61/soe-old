@@ -1,0 +1,125 @@
+Option Compare Database
+
+
+Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As String, Optional username As String = "", Optional pw As String = "")
+  'On Error GoTo err_Copy
+  'Echo False
+  
+  Dim xmlhttp
+  Dim sharepointFileName
+  Dim tsIn
+  Dim sBody
+  Dim Lvarbin() As Byte
+  Dim LobjXML As Object
+  Dim LstrFileName As String
+  Dim LvarBinData As Variant
+  Dim PstrFullfileName As String
+  Dim Target_URL As String
+  Dim fso As Object
+  Set fso = CreateObject("Scripting.FileSystemObject")
+  Dim fldr As Folder
+  Dim f As File
+  Dim RetVal
+  Dim i As Integer
+  Dim totFiles As Integer
+  Dim Start As Date, Finish As Date
+  
+  If username = Empty Then username = GetUserName 'InputBox("Username?")
+  If pw = Empty Then pw = InputBox_Password("Username: " & GetUserName & vbCrLf & "Please enter your password:")
+  Set LobjXML = CreateObject("Microsoft.XMLHTTP")
+    fname = filename_from_filepath(from_path)
+    Status "Trying to copy file to sharepoint site: " & fname & "(" & sp_url & fname & ")"
+    Select Case True
+      Case fname Like "*.gif", _
+           fname Like "*.xls", _
+           fname Like "*.mps", _
+           fname Like "*.pdf"
+             '*** Upload binary files ***
+             ' Read the file into a byte array.
+             Debug.Print from_path
+             ReDim Lvarbin(FileLen(from_path) - 1)
+             f_num = FreeFile
+             Open from_path For Binary As #f_num
+              Get #f_num, , Lvarbin
+             Close #f_num
+             ' Convert to variant to PUT.
+             LvarBinData = Lvarbin
+            '*********************************
+            '*** verify that sp folder exists
+            '*** - if not, then create it
+            '*********************************
+            LobjXML.Open "HEAD", sp_url, False 'Check for Directory
+            LobjXML.Send
+            If LobjXML.StatusText = "NOT FOUND" Then
+              Status "Creating folder in Sharepoint list : " & sp_url
+              LobjXML.Open "MKCOL", sp_url, False
+              LobjXML.Send
+            End If
+            '*****************
+            Target_URL = sp_url & URLEncode(fname)
+            Status "Updating file in Sharepoint list : " & sp_url & fname
+            ' Put the data to the server, false means synchronous.
+            LobjXML.Open "PUT", Target_URL, False, username, pw
+            LobjXML.Send LvarBinData
+      Case Else
+            '*** Upload text files ***
+      '      Set tsIn = f.OpenAsTextStream
+      '      sBody = tsIn.ReadAll
+      '      tsIn.Close
+      '
+      '      Set xmlhttp = CreateObject("MSXML2.XMLHTTP.4.0")
+      '      xmlhttp.Open "PUT", sharepointFileName, False, username, pw
+      '      xmlhttp.Send sBody
+    End Select
+    
+    Status ""
+    Set LobjXML = Nothing
+    Set fso = Nothing
+err_Copy:
+  'If Err <> 0 Then
+  '  MsgBox Err & " " & Err.Description
+  'End If
+  Echo True
+End Sub
+Sub SendPdfToSharepoint(ByVal Report_name As String, _
+                        ByVal sp_url As String, _
+                        Optional ByVal file_name As String = "", _
+                        Optional ByVal ShowPDF As Boolean = False, _
+                        Optional ByVal username As String = "", _
+                        Optional ByVal pw As String = "")
+  Dim tmp_path As String
+  Dim tmp_file As String
+  'Dim tmp_file As String
+  If username = Empty Then username = GetUserName 'InputBox("Username?")
+  If pw = Empty Then pw = InputBox_Password("Username :" & GetUserName & vbCrLf & "Please enter your password:")
+  If file_name = Empty Then file_name = Report_name
+  If Not file_name Like "*.pdf" Then file_name = file_name & ".pdf"
+  tmp_path = TrailingSlash(CurrentProject.path) 'Environ("Temp") & "\"
+  tmp_file = tmp_path & file_name
+  PrintToPDF Report_name, tmp_path, file_name, False 'ShowPDF
+  CopyFileToSharePoint tmp_file, sp_url, username, pw
+  Kill tmp_file
+End Sub
+Sub test_copy()
+  f = "C:\Users\dsimpson\Documents\A Technical Guide in Managing HFH Projects_Oct 10.pdf"
+  url = "http://teams.habitat.org/sites/intl/SOE2/doc/Results/Self-Assessment/FY13/New/"
+  CopyFileToSharePoint f, url
+End Sub
+Sub test_pdf()
+  'rpt = "SOE Assessment Completion Status"
+  'fname = rpt & ".pdf"
+  'url = "http://teams.habitat.org/sites/intl/SOE2/doc/Results/Self-Assessment/FY13/New/"
+  SendPdfToSharepoint "SOE Assessment Completion Status", get_global("sp_url_assessment_results") & "/FY13/Bluebird/"
+  'docmd.TransferSharePointList(acLinkSharePointList,
+End Sub
+Sub clean_GUID()
+  guid = "%7B079FC821%2D551E%2D4CDB%2DB2FC%2D0F51F2216467%7D"
+  guid = Replace(guid, "%7B", "{")
+  guid = Replace(guid, "%7D", "}")
+  guid = Replace(guid, "%2D", "-")
+  Debug.Print guid
+End Sub
+Sub test_transfer()
+  
+End Sub
+
