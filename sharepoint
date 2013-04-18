@@ -2,7 +2,7 @@ Option Compare Database
 
 
 Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As String, Optional username As String = "", Optional pw As String = "")
-  'On Error GoTo err_Copy
+  On Error GoTo err_Copy
   'Echo False
   
   Dim xmlhttp
@@ -36,7 +36,7 @@ Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As Strin
            fname Like "*.pdf"
              '*** Upload binary files ***
              ' Read the file into a byte array.
-             Debug.Print from_path
+             'Debug.Print from_path
              ReDim Lvarbin(FileLen(from_path) - 1)
              f_num = FreeFile
              Open from_path For Binary As #f_num
@@ -48,12 +48,13 @@ Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As Strin
             '*** verify that sp folder exists
             '*** - if not, then create it
             '*********************************
-            LobjXML.Open "HEAD", sp_url, False 'Check for Directory
+            LobjXML.Open "HEAD", sp_url, False ', username, pw 'Check for Directory
             LobjXML.Send
             If LobjXML.StatusText = "NOT FOUND" Then
               Status "Creating folder in Sharepoint list : " & sp_url
-              LobjXML.Open "MKCOL", sp_url, False
+              LobjXML.Open "MKCOL", sp_url, False ', username, pw
               LobjXML.Send
+              Status "--xmlhttp status: " & LobjXML.Status & " : " & LobjXML.StatusText
             End If
             '*****************
             Target_URL = sp_url & URLEncode(fname)
@@ -61,6 +62,7 @@ Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As Strin
             ' Put the data to the server, false means synchronous.
             LobjXML.Open "PUT", Target_URL, False, username, pw
             LobjXML.Send LvarBinData
+            Status "--xmlhttp status: " & LobjXML.Status & " : " & LobjXML.StatusText
       Case Else
             '*** Upload text files ***
       '      Set tsIn = f.OpenAsTextStream
@@ -76,9 +78,9 @@ Public Sub CopyFileToSharePoint(ByVal from_path As String, ByVal sp_url As Strin
     Set LobjXML = Nothing
     Set fso = Nothing
 err_Copy:
-  'If Err <> 0 Then
-  '  MsgBox Err & " " & Err.Description
-  'End If
+  If Err <> 0 Then
+    Status "*** ERROR ***" & vbCrLf & Err & " " & Err.Description
+  End If
   Echo True
 End Sub
 Sub SendPdfToSharepoint(ByVal Report_name As String, _
@@ -98,7 +100,7 @@ Sub SendPdfToSharepoint(ByVal Report_name As String, _
   tmp_file = tmp_path & file_name
   PrintToPDF Report_name, tmp_path, file_name, False 'ShowPDF
   CopyFileToSharePoint tmp_file, sp_url, username, pw
-  Kill tmp_file
+  'Kill tmp_file
 End Sub
 Sub test_copy()
   f = "C:\Users\dsimpson\Documents\A Technical Guide in Managing HFH Projects_Oct 10.pdf"
